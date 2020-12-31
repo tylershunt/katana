@@ -1,4 +1,4 @@
-#include "galois/Http.h"
+#include "galois/HttpClient.h"
 
 #include <curl/curl.h>
 
@@ -6,9 +6,7 @@
 #include "galois/Logging.h"
 #include "galois/Result.h"
 
-namespace {
-
-class CurlHandle {
+class galois::CurlHandle {
   CURL* handle_{};
   struct curl_slist* headers_{};
 
@@ -26,37 +24,40 @@ class CurlHandle {
 public:
   CurlHandle(const CurlHandle& no_copy) = delete;
   CurlHandle& operator=(const CurlHandle& no_copy) = delete;
-  CurlHandle(CurlHandle&& other) noexcept {
-    std::swap(handle_, other.handle_);
-    std::swap(headers_, other.headers_);
-  }
-  CurlHandle& operator=(CurlHandle&& other) noexcept {
-    std::swap(handle_, other.handle_);
-    std::swap(headers_, other.headers_);
-    return *this;
-  }
+  CurlHandle(CurlHandle&& no_move) noexcept = delete;
+  CurlHandle& operator=(CurlHandle&& no_move) noexcept = delete;
 
-  static galois::Result<CurlHandle> Make(
-      const std::string& url, std::vector<char>* response) {
+  static galois::Result<std::unique_ptr<CurlHandle>> Make() {
     CURL* curl = curl_easy_init();
     if (!curl) {
       return galois::ErrorCode::HttpError;
     }
-    CurlHandle handle(curl);
-    if (auto res = handle.SetOpt(CURLOPT_URL, url.c_str()); !res) {
-      return res.error();
-    }
-    if (auto res = handle.SetOpt(CURLOPT_WRITEDATA, response); !res) {
-      return res.error();
-    }
-    if (auto res = handle.SetOpt(CURLOPT_WRITEFUNCTION, WriteDataToVectorCB);
-        !res) {
-      return res.error();
-    }
-    return CurlHandle(std::move(handle));
+    return std::unique_ptr<CurlHandle>(new CurlHandle(curl));
   }
 
-  CURL* handle() { return handle_; }
+  Result<void> Reset(const std::string& url, std::vector<char>* response) {
+    // Cookies are not cleared on reset
+    curl_easy_reset(handle_);
+    if (auto res = SetOpt(CURLOPT_URL, url.c_str()); !res) {
+      return res.error();
+    }
+    if (auto res = SetOpt(CURLOPT_WRITEDATA, response); !res) {
+      return res.error();
+    }
+    if (auto res = SetOpt(CURLOPT_WRITEFUNCTION, WriteDataToVectorCB); !res) {
+      return res.error();
+    }
+
+    // common practice to pass an empty file to make sure the cookie engine
+    // is enabled (also does not clear cookies when set)
+    // https://curl.se/libcurl/c/CURLOPT_COOKIEFILE.html
+    if (auto res = SetOpt(CURLOPT_COOKIEFILE, ""); !res) {
+      return res.error();
+    }
+
+    return galois::ResultSuccess();
+  }
+
   ~CurlHandle() {
     if (headers_ != nullptr) {
       curl_slist_free_all(headers_);
@@ -110,33 +111,32 @@ public:
   }
 };
 
-galois::Result<void>
-HttpUploadCommon(CurlHandle&& holder, const std::string& data) {
-  if (auto res = holder.SetOpt(CURLOPT_POSTFIELDS, data.c_str()); !res) {
-    return res.error();
-  }
-  if (auto res = holder.SetOpt(CURLOPT_POSTFIELDSIZE, data.size()); !res) {
-    return res.error();
-  }
-  holder.SetHeader("Content-Type: application/json");
-  holder.SetHeader("Accept: application/json");
-  return holder.Perform();
+galois::HttpClient::HttpClient(std::unique_ptr<CurlHandle>&& handle)
+    : handle_(std::move(handle)) {
+  handle_->SetHeader("Content-Type: application/json");
+  handle_->SetHeader("Accept: application/json");
 }
 
-}  // namespace
-
 galois::Result<void>
-galois::HttpGet(const std::string& url, std::vector<char>* response) {
-  auto curl_res = CurlHandle::Make(url, response);
-  if (!curl_res) {
-    return curl_res.error();
-  }
-  CurlHandle curl(std::move(curl_res.value()));
-
-  if (auto res = curl.SetOpt(CURLOPT_HTTPGET, 1L); !res) {
+galois::HttpClient::UploadCommon(const std::string& data) {
+  if (auto res = handle_->SetOpt(CURLOPT_POSTFIELDS, data.c_str()); !res) {
     return res.error();
   }
-  if (auto res = curl.Perform(); !res) {
+  if (auto res = handle_->SetOpt(CURLOPT_POSTFIELDSIZE, data.size()); !res) {
+    return res.error();
+  }
+  return handle_->Perform();
+}
+
+galois::Result<void>
+galois::HttpClient::Get(const std::string& url, std::vector<char>* response) {
+  if (auto res = handle_->Reset(url, response); !res) {
+    return res.error();
+  }
+  if (auto res = handle_->SetOpt(CURLOPT_HTTPGET, 1L); !res) {
+    return res.error();
+  }
+  if (auto res = handle_->Perform(); !res) {
     GALOIS_LOG_DEBUG("GET failed for url: {}", url);
     return res;
   }
@@ -144,16 +144,13 @@ galois::HttpGet(const std::string& url, std::vector<char>* response) {
 }
 
 galois::Result<void>
-galois::HttpPost(
+galois::HttpClient::Post(
     const std::string& url, const std::string& data,
     std::vector<char>* response) {
-  auto handle_res = CurlHandle::Make(url, response);
-  if (!handle_res) {
-    GALOIS_LOG_ERROR("POST failed for url: {}", url);
-    return handle_res.error();
+  if (auto res = handle_->Reset(url, response); !res) {
+    return res.error();
   }
-
-  if (auto res = HttpUploadCommon(std::move(handle_res.value()), data); !res) {
+  if (auto res = UploadCommon(data); !res) {
     GALOIS_LOG_DEBUG("POST failed for url: {}", url);
     return res.error();
   }
@@ -161,17 +158,15 @@ galois::HttpPost(
 }
 
 galois::Result<void>
-galois::HttpDelete(const std::string& url, std::vector<char>* response) {
-  auto curl_res = CurlHandle::Make(url, response);
-  if (!curl_res) {
-    return curl_res.error();
-  }
-  CurlHandle curl = std::move(curl_res.value());
-
-  if (auto res = curl.SetOpt(CURLOPT_CUSTOMREQUEST, "DELETE"); !res) {
+galois::HttpClient::Delete(
+    const std::string& url, std::vector<char>* response) {
+  if (auto res = handle_->Reset(url, response); !res) {
     return res.error();
   }
-  if (auto res = curl.Perform(); !res) {
+  if (auto res = handle_->SetOpt(CURLOPT_CUSTOMREQUEST, "DELETE"); !res) {
+    return res.error();
+  }
+  if (auto res = handle_->Perform(); !res) {
     GALOIS_LOG_DEBUG("DELETE failed for url: {}", url);
     return res;
   }
@@ -179,33 +174,40 @@ galois::HttpDelete(const std::string& url, std::vector<char>* response) {
 }
 
 galois::Result<void>
-galois::HttpPut(
+galois::HttpClient::Put(
     const std::string& url, const std::string& data,
     std::vector<char>* response) {
-  auto curl_res = CurlHandle::Make(url, response);
-  if (!curl_res) {
-    return curl_res.error();
-  }
-  CurlHandle curl = std::move(curl_res.value());
-
-  if (auto res = curl.SetOpt(CURLOPT_CUSTOMREQUEST, "PUT"); !res) {
+  if (auto res = handle_->Reset(url, response); !res) {
     return res.error();
   }
-
-  if (auto res = HttpUploadCommon(std::move(curl), data); !res) {
+  if (auto res = handle_->SetOpt(CURLOPT_CUSTOMREQUEST, "PUT"); !res) {
+    return res.error();
+  }
+  if (auto res = UploadCommon(data); !res) {
     GALOIS_LOG_DEBUG("PUT failed for url: {}", url);
     return res.error();
   }
   return galois::ResultSuccess();
 }
 
-galois::Result<void>
-galois::HttpInit() {
+galois::Result<std::unique_ptr<galois::HttpClient>>
+galois::HttpClient::Make() {
+  // libcurl doesn't care how many times it's initialized
   auto init_ret = curl_global_init(CURL_GLOBAL_ALL);
   if (init_ret != CURLE_OK) {
     GALOIS_LOG_ERROR(
         "libcurl initialization failed: {}", curl_easy_strerror(init_ret));
     return ErrorCode::HttpError;
   }
-  return galois::ResultSuccess();
+  auto handle_res = CurlHandle::Make();
+  if (!handle_res) {
+    return handle_res.error();
+  }
+  return std::unique_ptr<HttpClient>(
+      new HttpClient(std::move(handle_res.value())));
 }
+
+galois::HttpClient::HttpClient(HttpClient&& other) noexcept = default;
+galois::HttpClient& galois::HttpClient::operator=(HttpClient&& other) noexcept =
+    default;
+galois::HttpClient::~HttpClient() = default;

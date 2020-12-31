@@ -13,7 +13,7 @@ set(sources
         src/Backtrace.cpp
         src/Env.cpp
         src/ErrorCode.cpp
-        src/Http.cpp
+        src/HttpClient.cpp
         src/JSON.cpp
         src/Logging.cpp
         src/Random.cpp
