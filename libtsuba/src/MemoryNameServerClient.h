@@ -22,6 +22,8 @@ class GALOIS_EXPORT MemoryNameServerClient : public NameServerClient {
 public:
   galois::Result<RDGMeta> Get(const galois::Uri& rdg_name) override;
 
+  galois::Result<RDGMeta> GetWithLease(const galois::Uri& rdg_name) override;
+
   galois::Result<void> CreateIfAbsent(
       const galois::Uri& rdg_name, const RDGMeta& meta) override;
 
@@ -30,6 +32,9 @@ public:
   galois::Result<void> Update(
       const galois::Uri& rdg_name, uint64_t old_version,
       const RDGMeta& meta) override;
+
+  galois::Result<void> Unlease([
+      [maybe_unused]] const galois::Uri& rdg_name) override;
 
   galois::Result<void> CheckHealth() override;
 };

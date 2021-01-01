@@ -27,6 +27,7 @@ enum class ErrorCode {
   MpiError = 15,
   BadVersion = 16,
   GSError = 17,
+  LeaseError = 18,
 };
 
 GALOIS_EXPORT ErrorCode ArrowToTsuba(arrow::StatusCode);
@@ -71,6 +72,8 @@ public:
       return "some MPI process reported an error";
     case ErrorCode::GSError:
       return "Google storage error";
+    case ErrorCode::LeaseError:
+      return "lease not held";
     default:
       return "unknown error";
     }

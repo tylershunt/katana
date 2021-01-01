@@ -31,6 +31,16 @@ MemoryNameServerClient::Get(const galois::Uri& rdg_name) {
   return lookup(rdg_name.Encode());
 }
 
+galois::Result<RDGMeta>
+MemoryNameServerClient::GetWithLease(const galois::Uri& rdg_name) {
+  return Get(rdg_name);
+}
+
+galois::Result<void>
+MemoryNameServerClient::Unlease([[maybe_unused]] const galois::Uri& rdg_name) {
+  return galois::ResultSuccess();
+}
+
 galois::Result<void>
 MemoryNameServerClient::CreateIfAbsent(
     const galois::Uri& rdg_name, const RDGMeta& meta) {
@@ -62,6 +72,7 @@ MemoryNameServerClient::Delete(const galois::Uri& rdg_name) {
   if (it == server_state_.end()) {
     return ErrorCode::NotFound;
   }
+
   server_state_.erase(it);
   return galois::ResultSuccess();
 }

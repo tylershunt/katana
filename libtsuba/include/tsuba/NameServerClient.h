@@ -19,6 +19,8 @@ public:
 
   virtual galois::Result<RDGMeta> Get(const galois::Uri& rdg_name) = 0;
 
+  virtual galois::Result<RDGMeta> GetWithLease(const galois::Uri& rdg_name) = 0;
+
   /// CreateIfAbsent creates a name server entry if it is not already
   /// present. If the name is already created and its version matches meta,
   /// this function returns sucess; otherwise, it returns an error.
@@ -39,14 +41,13 @@ public:
       const galois::Uri& rdg_name, uint64_t old_version,
       const RDGMeta& meta) = 0;
 
+  /// Cancel an outstanding lease on an RDG.
+  ///
+  /// This is a collective operation.
+  virtual galois::Result<void> Unlease(const galois::Uri& rdg_name) = 0;
+
   virtual galois::Result<void> CheckHealth() = 0;
 };
-
-/// SetNameServerClientCB sets the callback that tsuba uses when
-/// the user requests a NameServerClient via `tsuba::GetNameServerClient`
-GALOIS_EXPORT void SetMakeNameServerClientCB(
-    std::function<galois::Result<std::unique_ptr<tsuba::NameServerClient>>()>
-        cb);
 
 }  // namespace tsuba
 
