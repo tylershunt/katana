@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# a cannonical place for gofmt that non go-phers might not keep on their path
+export PATH="${PATH}:/usr/local/go/bin"
+
 GOFMT=${GOFMT:-gofmt}
 set -eu
 
